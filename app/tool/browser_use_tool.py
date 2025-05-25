@@ -1,7 +1,11 @@
 import asyncio
 import base64
 import json
+import os
 from typing import Generic, Optional, TypeVar
+
+# Disable browser_use telemetry
+os.environ["ANONYMIZED_TELEMETRY"] = "false"
 
 from browser_use import Browser as BrowserUseBrowser
 from browser_use import BrowserConfig
