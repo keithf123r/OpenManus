@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.llm import LLM
 from app.logger import logger
 from app.sandbox.client import SANDBOX_CLIENT
-from app.schema import ROLE_TYPE, AgentState, Memory, Message
+from app.schema import ROLE_TYPE, AgentState, Memory, Message, ToolCall
+
+T = TypeVar("T")
 
 
 class BaseAgent(BaseModel, ABC):
@@ -194,3 +196,87 @@ class BaseAgent(BaseModel, ABC):
     def messages(self, value: List[Message]):
         """Set the list of messages in the agent's memory."""
         self.memory.messages = value
+
+    async def _execute_with_state_management(
+        self, 
+        operation: Callable[[], T],
+        error_state: AgentState = AgentState.ERROR
+    ) -> T:
+        """Execute an operation with automatic state management and error handling.
+        
+        Args:
+            operation: Async function to execute
+            error_state: State to transition to on error (default: ERROR)
+            
+        Returns:
+            Result from the operation
+            
+        Raises:
+            Exception: Re-raises any exception from the operation after state update
+        """
+        try:
+            return await operation()
+        except Exception as e:
+            self.state = error_state
+            logger.error(f"Error in {self.name}: {str(e)}", exc_info=True)
+            raise
+
+    async def _handle_tool_execution(
+        self,
+        tool_calls: List[ToolCall],
+        execute_tool_func: Callable[[ToolCall], Any],
+        special_tool_handler: Optional[Callable[[str, Any], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """Common pattern for executing multiple tool calls with error handling.
+        
+        Args:
+            tool_calls: List of tool calls to execute
+            execute_tool_func: Function to execute a single tool
+            special_tool_handler: Optional handler for special tools
+            
+        Returns:
+            List of tool execution results with metadata
+        """
+        results = []
+        
+        for tool_call in tool_calls:
+            try:
+                logger.info(f"🔧 Executing tool: {tool_call.function.name}")
+                result = await execute_tool_func(tool_call)
+                
+                # Handle special tools if handler provided
+                if special_tool_handler:
+                    await special_tool_handler(tool_call.function.name, result)
+                
+                results.append({
+                    "tool_name": tool_call.function.name,
+                    "tool_id": tool_call.id,
+                    "result": result,
+                    "status": "success"
+                })
+                
+            except Exception as e:
+                error_msg = f"Error executing {tool_call.function.name}: {str(e)}"
+                logger.error(error_msg)
+                results.append({
+                    "tool_name": tool_call.function.name,
+                    "tool_id": tool_call.id,
+                    "error": error_msg,
+                    "status": "failed"
+                })
+                
+        return results
+
+    def _check_termination_condition(self, condition: Callable[[], bool]) -> bool:
+        """Check if agent should terminate based on a condition.
+        
+        Args:
+            condition: Function that returns True if agent should terminate
+            
+        Returns:
+            True if agent should terminate
+        """
+        if condition():
+            self.state = AgentState.FINISHED
+            return True
+        return False
