@@ -60,8 +60,8 @@ class DockerSandbox:
             # Prepare container config
             host_config = self.client.api.create_host_config(
                 mem_limit=self.config.memory_limit,
-                cpu_period=100000,
-                cpu_quota=int(100000 * self.config.cpu_limit),
+                cpu_period=self.config.cpu_period,
+                cpu_quota=int(self.config.cpu_period * self.config.cpu_limit),
                 network_mode="none" if not self.config.network_enabled else "bridge",
                 binds=self._prepare_volume_bindings(),
             )
@@ -91,8 +91,10 @@ class DockerSandbox:
             self.terminal = AsyncDockerizedTerminal(
                 container["Id"],
                 self.config.work_dir,
-                env_vars={"PYTHONUNBUFFERED": "1"}
+                env_vars={"PYTHONUNBUFFERED": "1"},
                 # Ensure Python output is not buffered
+                default_timeout=self.config.timeout,
+                config=self.config
             )
             await self.terminal.init()
 

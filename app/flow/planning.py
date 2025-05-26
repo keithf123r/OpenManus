@@ -1,7 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import Field
 
@@ -52,8 +52,8 @@ class PlanningFlow(BaseFlow):
     current_step_index: Optional[int] = None
 
     def __init__(
-        self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
-    ):
+        self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data: Any
+    ) -> None:
         # Set executor keys before super().__init__
         if "executors" in data:
             data["executor_keys"] = data.pop("executors")
@@ -74,7 +74,7 @@ class PlanningFlow(BaseFlow):
         if not self.executor_keys:
             self.executor_keys = list(self.agents.keys())
 
-    def get_executor(self, step_type: Optional[str] = None) -> BaseAgent:
+    def get_executor(self, step_type: Optional[str] = None) -> Optional[BaseAgent]:
         """
         Get an appropriate executor agent for the current step.
         Can be extended to select agents based on step type/requirements.
@@ -192,7 +192,7 @@ class PlanningFlow(BaseFlow):
             }
         )
 
-    async def _get_current_step_info(self) -> tuple[Optional[int], Optional[dict]]:
+    async def _get_current_step_info(self) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
         """
         Parse the current plan to identify the first non-completed step's index and info.
         Returns (None, None) if no active step is found.
@@ -256,7 +256,7 @@ class PlanningFlow(BaseFlow):
             logger.warning(f"Error finding current step index: {e}")
             return None, None
 
-    async def _execute_step(self, executor: BaseAgent, step_info: dict) -> str:
+    async def _execute_step(self, executor: BaseAgent, step_info: Dict[str, Any]) -> str:
         """Execute the current step with the specified agent using agent.run()."""
         # Prepare context for the agent with current plan status
         plan_status = await self._get_plan_text()

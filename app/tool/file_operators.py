@@ -1,6 +1,7 @@
 """File operation interfaces and implementations for local and sandbox environments."""
 
 import asyncio
+import aiofiles
 from pathlib import Path
 from typing import Optional, Protocol, Tuple, Union, runtime_checkable
 
@@ -47,24 +48,28 @@ class LocalFileOperator(FileOperator):
     async def read_file(self, path: PathLike) -> str:
         """Read content from a local file."""
         try:
-            return Path(path).read_text(encoding=self.encoding)
+            async with aiofiles.open(path, mode='r', encoding=self.encoding) as f:
+                return await f.read()
         except Exception as e:
             raise ToolError(f"Failed to read {path}: {str(e)}") from None
 
     async def write_file(self, path: PathLike, content: str) -> None:
         """Write content to a local file."""
         try:
-            Path(path).write_text(content, encoding=self.encoding)
+            async with aiofiles.open(path, mode='w', encoding=self.encoding) as f:
+                await f.write(content)
         except Exception as e:
             raise ToolError(f"Failed to write to {path}: {str(e)}") from None
 
     async def is_directory(self, path: PathLike) -> bool:
         """Check if path points to a directory."""
-        return Path(path).is_dir()
+        # Use asyncio.to_thread for Path operations that don't have async alternatives
+        return await asyncio.to_thread(Path(path).is_dir)
 
     async def exists(self, path: PathLike) -> bool:
         """Check if path exists."""
-        return Path(path).exists()
+        # Use asyncio.to_thread for Path operations that don't have async alternatives
+        return await asyncio.to_thread(Path(path).exists)
 
     async def run_command(
         self, cmd: str, timeout: Optional[float] = 120.0

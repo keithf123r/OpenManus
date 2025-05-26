@@ -94,6 +94,11 @@ temperature = 0.0                          # Controls randomness for vision mode
 #cpu_limit = 2.0
 #timeout = 300
 #network_enabled = true
+#cpu_period = 100000  # CPU scheduling period in microseconds
+#shell = "bash"  # Shell to use in container
+#shell_args = ["--norc", "--noprofile"]  # Shell arguments
+#user = "root"  # User to run commands as
+#term_type = "dumb"  # Terminal type
 
 # MCP (Model Context Protocol) configuration
 [mcp]

@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import config
 from app.logger import logger
@@ -17,6 +16,7 @@ from app.tool.search import (
     WebSearchEngine,
 )
 from app.tool.search.base import SearchItem
+from app.tool.search.circuit_breaker import CircuitOpenError, SearchEngineCircuitBreaker
 
 
 class SearchResult(BaseModel):
@@ -197,6 +197,14 @@ class WebSearch(BaseTool):
         "bing": BingSearchEngine(),
     }
     content_fetcher: WebContentFetcher = WebContentFetcher()
+    _circuit_breaker: SearchEngineCircuitBreaker = Field(
+        default_factory=lambda: SearchEngineCircuitBreaker(
+            failure_threshold=3,
+            success_threshold=2,
+            timeout=60.0,
+            half_open_timeout=30.0
+        )
+    )
 
     async def execute(
         self,
@@ -219,17 +227,7 @@ class WebSearch(BaseTool):
         Returns:
             A structured response containing search results and metadata
         """
-        # Get settings from config
-        retry_delay = (
-            getattr(config.search_config, "retry_delay", 60)
-            if config.search_config
-            else 60
-        )
-        max_retries = (
-            getattr(config.search_config, "max_retries", 3)
-            if config.search_config
-            else 3
-        )
+        # Circuit breaker now handles retries internally
 
         # Use config values for lang and country if not specified
         if lang is None:
@@ -248,82 +246,101 @@ class WebSearch(BaseTool):
 
         search_params = {"lang": lang, "country": country}
 
-        # Try searching with retries when all engines fail
-        for retry_count in range(max_retries + 1):
-            results = await self._try_all_engines(query, num_results, search_params)
+        # Try searching with circuit breaker pattern
+        results = await self._try_all_engines_with_circuit_breaker(
+            query, num_results, search_params
+        )
+        
+        if results:
+            # Fetch content if requested
+            if fetch_content:
+                results = await self._fetch_content_for_results(results)
 
-            if results:
-                # Fetch content if requested
-                if fetch_content:
-                    results = await self._fetch_content_for_results(results)
-
-                # Return a successful structured response
-                return SearchResponse(
-                    status="success",
-                    query=query,
-                    results=results,
-                    metadata=SearchMetadata(
-                        total_results=len(results),
-                        language=lang,
-                        country=country,
-                    ),
-                )
-
-            if retry_count < max_retries:
-                # All engines failed, wait and retry
-                logger.warning(
-                    f"All search engines failed. Waiting {retry_delay} seconds before retry {retry_count + 1}/{max_retries}..."
-                )
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error(
-                    f"All search engines failed after {max_retries} retries. Giving up."
-                )
-
-        # Return an error response
+            # Return a successful structured response
+            return SearchResponse(
+                status="success",
+                query=query,
+                results=results,
+                metadata=SearchMetadata(
+                    total_results=len(results),
+                    language=lang,
+                    country=country,
+                ),
+            )
+        
+        # Return an error response with circuit breaker status
+        circuit_status = self._circuit_breaker.get_all_status()
+        error_details = "All search engines are unavailable. Circuit breaker status: " + str(circuit_status)
+        
         return SearchResponse(
             query=query,
-            error="All search engines failed to return results after multiple retries.",
+            error=error_details,
             results=[],
         )
 
-    async def _try_all_engines(
+    async def _try_all_engines_with_circuit_breaker(
         self, query: str, num_results: int, search_params: Dict[str, Any]
     ) -> List[SearchResult]:
-        """Try all search engines in the configured order."""
+        """Try all search engines with circuit breaker pattern."""
         engine_order = self._get_engine_order()
         failed_engines = []
+        skipped_engines = []
 
         for engine_name in engine_order:
+            # Check if circuit is open before attempting
+            if not self._circuit_breaker.is_available(engine_name):
+                status = self._circuit_breaker.get_status(engine_name)
+                logger.info(
+                    f"⚡ Skipping {engine_name} - circuit breaker is OPEN. "
+                    f"Retry after {status.get('retry_after_seconds', 0):.1f}s"
+                )
+                skipped_engines.append(engine_name)
+                continue
+                
             engine = self._search_engine[engine_name]
             logger.info(f"🔎 Attempting search with {engine_name.capitalize()}...")
-            search_items = await self._perform_search_with_engine(
-                engine, query, num_results, search_params
+            
+            try:
+                # Use circuit breaker to execute search
+                search_items = await self._circuit_breaker.call(
+                    engine_name,
+                    self._perform_search_with_engine,
+                    engine, query, num_results, search_params
+                )
+                
+                if search_items:
+                    if failed_engines or skipped_engines:
+                        logger.info(
+                            f"Search successful with {engine_name.capitalize()} "
+                            f"(failed: {failed_engines}, skipped: {skipped_engines})"
+                        )
+                    
+                    # Transform search items into structured results
+                    return [
+                        SearchResult(
+                            position=i + 1,
+                            url=item.url,
+                            title=item.title or f"Result {i+1}",
+                            description=item.description or "",
+                            source=engine_name,
+                        )
+                        for i, item in enumerate(search_items)
+                    ]
+                else:
+                    failed_engines.append(engine_name)
+                    
+            except CircuitOpenError as e:
+                logger.warning(f"Circuit breaker prevented call to {engine_name}: {e}")
+                skipped_engines.append(engine_name)
+            except Exception as e:
+                logger.error(f"Search with {engine_name} failed: {e}")
+                failed_engines.append(engine_name)
+
+        if failed_engines or skipped_engines:
+            logger.error(
+                f"All search engines unavailable. Failed: {failed_engines}, "
+                f"Circuit open: {skipped_engines}"
             )
-
-            if not search_items:
-                continue
-
-            if failed_engines:
-                logger.info(
-                    f"Search successful with {engine_name.capitalize()} after trying: {', '.join(failed_engines)}"
-                )
-
-            # Transform search items into structured results
-            return [
-                SearchResult(
-                    position=i + 1,
-                    url=item.url,
-                    title=item.title
-                    or f"Result {i+1}",  # Ensure we always have a title
-                    description=item.description or "",
-                    source=engine_name,
-                )
-                for i, item in enumerate(search_items)
-            ]
-
-        if failed_engines:
-            logger.error(f"All search engines failed: {', '.join(failed_engines)}")
         return []
 
     async def _fetch_content_for_results(
@@ -384,9 +401,6 @@ class WebSearch(BaseTool):
 
         return engine_order
 
-    @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10)
-    )
     async def _perform_search_with_engine(
         self,
         engine: WebSearchEngine,
@@ -395,7 +409,8 @@ class WebSearch(BaseTool):
         search_params: Dict[str, Any],
     ) -> List[SearchItem]:
         """Execute search with the given engine and parameters."""
-        return await asyncio.get_event_loop().run_in_executor(
+        # Execute in thread pool without retry (circuit breaker handles retries)
+        items = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: list(
                 engine.perform_search(
@@ -406,6 +421,12 @@ class WebSearch(BaseTool):
                 )
             ),
         )
+        
+        # Empty results should be treated as failure for circuit breaker
+        if not items:
+            raise Exception("No results returned from search engine")
+            
+        return items
 
 
 if __name__ == "__main__":

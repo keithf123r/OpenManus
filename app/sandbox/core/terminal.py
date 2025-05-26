@@ -15,18 +15,22 @@ from docker import APIClient
 from docker.errors import APIError
 from docker.models.containers import Container
 
+from app.config import SandboxSettings
+
 
 class DockerSession:
-    def __init__(self, container_id: str) -> None:
+    def __init__(self, container_id: str, config: Optional[SandboxSettings] = None) -> None:
         """Initializes a Docker session.
 
         Args:
             container_id: ID of the Docker container.
+            config: Sandbox configuration settings.
         """
         self.api = APIClient()
         self.container_id = container_id
         self.exec_id = None
         self.socket = None
+        self.config = config or SandboxSettings()
 
     async def create(self, working_dir: str, env_vars: Dict[str, str]) -> None:
         """Creates an interactive session with the container.
@@ -38,13 +42,14 @@ class DockerSession:
         Raises:
             RuntimeError: If socket connection fails.
         """
+        shell_args = " ".join(self.config.shell_args)
         startup_command = [
-            "bash",
+            self.config.shell,
             "-c",
             f"cd {working_dir} && "
             "PROMPT_COMMAND='' "
             "PS1='$ ' "
-            "exec bash --norc --noprofile",
+            f"exec {self.config.shell} {shell_args}",
         ]
 
         exec_data = self.api.exec_create(
@@ -55,8 +60,8 @@ class DockerSession:
             stdout=True,
             stderr=True,
             privileged=True,
-            user="root",
-            environment={**env_vars, "TERM": "dumb", "PS1": "$ ", "PROMPT_COMMAND": ""},
+            user=self.config.user,
+            environment={**env_vars, "TERM": self.config.term_type, "PS1": "$ ", "PROMPT_COMMAND": ""},
         )
         self.exec_id = exec_data["Id"]
 
@@ -255,6 +260,7 @@ class AsyncDockerizedTerminal:
         working_dir: str = "/workspace",
         env_vars: Optional[Dict[str, str]] = None,
         default_timeout: int = 60,
+        config: Optional[SandboxSettings] = None,
     ) -> None:
         """Initializes an asynchronous terminal for Docker containers.
 
@@ -263,6 +269,7 @@ class AsyncDockerizedTerminal:
             working_dir: Working directory inside the container.
             env_vars: Environment variables to set.
             default_timeout: Default command execution timeout in seconds.
+            config: Sandbox configuration settings.
         """
         self.client = docker.from_env()
         self.container = (
@@ -273,6 +280,7 @@ class AsyncDockerizedTerminal:
         self.working_dir = working_dir
         self.env_vars = env_vars or {}
         self.default_timeout = default_timeout
+        self.config = config or SandboxSettings()
         self.session = None
 
     async def init(self) -> None:
@@ -285,7 +293,7 @@ class AsyncDockerizedTerminal:
         """
         await self._ensure_workdir()
 
-        self.session = DockerSession(self.container.id)
+        self.session = DockerSession(self.container.id, self.config)
         await self.session.create(self.working_dir, self.env_vars)
 
     async def _ensure_workdir(self) -> None:

@@ -97,6 +97,16 @@ class SandboxSettings(BaseModel):
     network_enabled: bool = Field(
         False, description="Whether network access is allowed"
     )
+    # Docker CPU scheduling configuration
+    cpu_period: int = Field(100000, description="CPU scheduling period in microseconds")
+    # Terminal configuration
+    shell: str = Field("bash", description="Shell to use in container")
+    shell_args: List[str] = Field(
+        default_factory=lambda: ["--norc", "--noprofile"],
+        description="Shell arguments"
+    )
+    user: str = Field("root", description="User to run commands as")
+    term_type: str = Field("dumb", description="Terminal type")
 
 
 class MCPServerConfig(BaseModel):
