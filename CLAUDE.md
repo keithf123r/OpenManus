@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenManus is an open-source framework for building general AI agents, created by the MetaGPT team. It provides multiple agent types and tools for various tasks including browser automation, data analysis, and software engineering.
+OpenManus is a general AI agent.
 
 ## Development Commands
 
@@ -71,7 +71,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 - **Error Handling**: Custom exceptions in `app/exceptions.py`. Always wrap external operations. Tools have fallback mechanisms.
 - **Prompts**: System prompts are in `app/prompt/`. Each agent has its own prompt module with dynamic modification support.
 - **State Management**: Agents use `AgentState` enum (IDLE, RUNNING, SUCCESS, FAILED, TERMINATED, ERROR).
-- **Working Directories**: 
+- **Working Directories**:
   - Workspace: `PROJECT_ROOT/workspace/`
   - Logs: `PROJECT_ROOT/logs/`
   - MCP server module: `app.mcp.server`
