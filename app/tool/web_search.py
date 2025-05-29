@@ -190,14 +190,14 @@ class WebSearch(BaseTool):
         },
         "required": ["query"],
     }
-    _search_engine: dict[str, WebSearchEngine] = {
+    search_engine: dict[str, WebSearchEngine] = {
         "google": GoogleSearchEngine(),
         "baidu": BaiduSearchEngine(),
         "duckduckgo": DuckDuckGoSearchEngine(),
         "bing": BingSearchEngine(),
     }
     content_fetcher: WebContentFetcher = WebContentFetcher()
-    _circuit_breaker: SearchEngineCircuitBreaker = Field(
+    circuit_breaker: SearchEngineCircuitBreaker = Field(
         default_factory=lambda: SearchEngineCircuitBreaker(
             failure_threshold=3,
             success_threshold=2,
@@ -269,7 +269,7 @@ class WebSearch(BaseTool):
             )
         
         # Return an error response with circuit breaker status
-        circuit_status = self._circuit_breaker.get_all_status()
+        circuit_status = self.circuit_breaker.get_all_status()
         error_details = "All search engines are unavailable. Circuit breaker status: " + str(circuit_status)
         
         return SearchResponse(
@@ -288,8 +288,8 @@ class WebSearch(BaseTool):
 
         for engine_name in engine_order:
             # Check if circuit is open before attempting
-            if not self._circuit_breaker.is_available(engine_name):
-                status = self._circuit_breaker.get_status(engine_name)
+            if not self.circuit_breaker.is_available(engine_name):
+                status = self.circuit_breaker.get_status(engine_name)
                 logger.info(
                     f"⚡ Skipping {engine_name} - circuit breaker is OPEN. "
                     f"Retry after {status.get('retry_after_seconds', 0):.1f}s"
@@ -297,12 +297,12 @@ class WebSearch(BaseTool):
                 skipped_engines.append(engine_name)
                 continue
                 
-            engine = self._search_engine[engine_name]
+            engine = self.search_engine[engine_name]
             logger.info(f"🔎 Attempting search with {engine_name.capitalize()}...")
             
             try:
                 # Use circuit breaker to execute search
-                search_items = await self._circuit_breaker.call(
+                search_items = await self.circuit_breaker.call(
                     engine_name,
                     self._perform_search_with_engine,
                     engine, query, num_results, search_params
@@ -389,15 +389,15 @@ class WebSearch(BaseTool):
         )
 
         # Start with preferred engine, then fallbacks, then remaining engines
-        engine_order = [preferred] if preferred in self._search_engine else []
+        engine_order = [preferred] if preferred in self.search_engine else []
         engine_order.extend(
             [
                 fb
                 for fb in fallbacks
-                if fb in self._search_engine and fb not in engine_order
+                if fb in self.search_engine and fb not in engine_order
             ]
         )
-        engine_order.extend([e for e in self._search_engine if e not in engine_order])
+        engine_order.extend([e for e in self.search_engine if e not in engine_order])
 
         return engine_order
 
